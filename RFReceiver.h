@@ -1,14 +1,7 @@
 #ifndef RECEIVER_H
 #define RECEIVER_H
 
-#if ARDUINO >= 100
-#include "Arduino.h"
-#else
-#include "WProgram.h"
-#include "pins_arduino.h"
-#endif
-
-#include <PinChangeInterruptHandler.h>
+#include <stdint.h>
 
 enum {
   MAX_PAYLOAD_SIZE = 80,
@@ -17,44 +10,40 @@ enum {
   MAX_SENDER_ID = 31
 };
 
-class RFReceiver : PinChangeInterruptHandler {
-    const byte inputPin;
-    const unsigned int pulseLimit;
+class RFReceiver {
+    const uint8_t inputPin;
+    const uint32_t pulseLimit;
 
     // Input buffer and input state
-    byte shiftByte;
-    byte errorCorBuf[3];
-    byte bitCount, byteCount, errorCorBufCount;
-    unsigned long lastTimestamp;
+    uint8_t shiftByte;
+    uint8_t errorCorBuf[3];
+    uint8_t bitCount, byteCount, errorCorBufCount;
+    uint32_t lastTimestamp;
     bool packageStarted;
 
-    byte inputBuf[MAX_PACKAGE_SIZE];
-    byte inputBufLen;
+    uint8_t inputBuf[MAX_PACKAGE_SIZE];
+    uint8_t inputBufLen;
     uint16_t checksum;
     volatile bool inputBufReady;
-    byte changeCount;
+    uint8_t changeCount;
 
     // Used to filter out duplicate packages
-    byte prevPackageIds[MAX_SENDER_ID + 1];
+    uint8_t prevPackageIds[MAX_SENDER_ID + 1];
 
-    byte recvDataRaw(byte * data);
+    uint8_t recvDataRaw(uint8_t * data);
 
   public:
-    RFReceiver(byte inputPin, unsigned int pulseLength = 100) : inputPin(inputPin),
+    RFReceiver(uint8_t inputPin, uint16_t pulseLength = 100) : inputPin(inputPin),
         pulseLimit((pulseLength << 2) - (pulseLength >> 1)), shiftByte(0),
         bitCount(0), byteCount(0), errorCorBufCount(0), lastTimestamp(0),
         packageStarted(false), inputBufLen(0), checksum(0),
         inputBufReady(false), changeCount(0) {
 
     }
-    void begin() {
-      pinMode(inputPin, INPUT);
-      attachPCInterrupt(digitalPinToPCINT(inputPin));
-    }
 
-    void stop() {
-      detachPCInterrupt(digitalPinToPCINT(inputPin));
-    }
+    int begin(uint8_t gpio);
+
+    void stop();
 
     /**
      * Returns true if a valid and deduplicated package is in the buffer, so
@@ -66,10 +55,18 @@ class RFReceiver : PinChangeInterruptHandler {
       return inputBufReady;
     }
 
-    byte recvPackage(byte * data, byte *pSenderId = 0, byte *pPackageId = 0);
+    uint8_t recvPackage(uint8_t * data, uint8_t *pSenderId = 0, uint8_t *pPackageId = 0);
 
-    void decodeByte(byte inputByte);
-    virtual void handlePCInterrupt(int8_t pcIntNum, bool value);
+    void decodeByte(uint8_t inputByte);
+
+
+    static RFReceiver* instance;
+    void handleGpio(int gpio, int level, uint32_t tick);
+
+    static void staticHandleGpio(int gpio, int level, uint32_t tick) {
+      instance->handleGpio(gpio, level, tick);
+    }
+
 };
 
 #endif  /* RECEIVER_H */

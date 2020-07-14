@@ -1,26 +1,21 @@
 #include "RFReceiver.h"
 
-#if defined(__AVR__)
-#include <util/crc16.h>
-#endif
+#include <cstring>
+#include "pigpio.h"
+
 
 static inline uint16_t crc_update(uint16_t crc, uint8_t data) {
-  #if defined(__AVR__)
-    return _crc_ccitt_update(crc, data);
-  #else
     // Source: http://www.atmel.com/webdoc/AVRLibcReferenceManual/group__util__crc_1ga1c1d3ad875310cbc58000e24d981ad20.html
     data ^= crc & 0xFF;
     data ^= data << 4;
 
-    return ((((uint16_t)data << 8) | (crc >> 8)) ^ (uint8_t)(data >> 4)
-            ^ ((uint16_t)data << 3));
-  #endif
+    return ((((uint16_t)data << 8) | (crc >> 8)) ^ (uint8_t)(data >> 4) ^ ((uint16_t)data << 3));
 }
 
-static inline byte recoverByte(const byte b1, const byte b2, const byte b3) {
+static inline uint8_t recoverByte(const uint8_t b1, const uint8_t b2, const uint8_t b3) {
   // Discard all bits that occur only once in the three input bytes
   // Use all bits that are in b1 and b2
-  byte res = b1 & b2;
+  uint8_t res = b1 & b2;
   // Use all bits that are in b1 and b3
   res |= b1 & b3;
   // Use all bits that are in b2 and b3
@@ -28,7 +23,7 @@ static inline byte recoverByte(const byte b1, const byte b2, const byte b3) {
   return res;
 }
 
-void RFReceiver::decodeByte(byte inputByte) {
+void RFReceiver::decodeByte(uint8_t inputByte) {
   if (!packageStarted)
     return;
 
@@ -48,15 +43,16 @@ void RFReceiver::decodeByte(byte inputByte) {
 
     inputBufLen = errorCorBuf[0];
     checksum = crc_update(checksum, inputBufLen);
+
   } else {
-    byte data = recoverByte(errorCorBuf[0], errorCorBuf[1], errorCorBuf[2]);
+    uint8_t data = recoverByte(errorCorBuf[0], errorCorBuf[1], errorCorBuf[2]);
     inputBuf[byteCount - 1] = data;
     // Calculate the checksum on the fly
     checksum = crc_update(checksum, data);
 
     if (byteCount == inputBufLen) {
-      byte senderId = inputBuf[inputBufLen - 4];
-      byte packageId = inputBuf[inputBufLen - 3];
+      uint8_t senderId = inputBuf[inputBufLen - 4];
+      uint8_t packageId = inputBuf[inputBufLen - 3];
 
       // Ignore duplicate packages and check if the checksum is correct
       if (!checksum && senderId <= MAX_SENDER_ID && prevPackageIds[senderId] != packageId) {
@@ -72,18 +68,18 @@ void RFReceiver::decodeByte(byte inputByte) {
   ++byteCount;
 }
 
-void RFReceiver::handlePCInterrupt(int8_t pcIntNum, bool state) {
+void RFReceiver::handleGpio(int gpio, int level, uint32_t tick) {
   if (inputBufReady)
     return;
 
   ++changeCount;
 
   {
-    unsigned long time = micros();
-    if (time - lastTimestamp < pulseLimit)
+    if (tick - lastTimestamp < pulseLimit) {
       return;
+    }
 
-    lastTimestamp = time;
+    lastTimestamp = tick;
   }
 
   shiftByte = (shiftByte >> 2) | ((changeCount - 1) << 6);
@@ -107,10 +103,10 @@ void RFReceiver::handlePCInterrupt(int8_t pcIntNum, bool state) {
   }
 }
 
-byte RFReceiver::recvDataRaw(byte * data) {
+uint8_t RFReceiver::recvDataRaw(uint8_t * data) {
   while (!inputBufReady);
 
-  byte len = inputBufLen;
+  uint8_t len = inputBufLen;
   memcpy(data, inputBuf, len - 2);
 
   // Enable the input as fast as possible
@@ -119,11 +115,11 @@ byte RFReceiver::recvDataRaw(byte * data) {
   return len - 2;
 }
 
-byte RFReceiver::recvPackage(byte *data, byte *pSenderId, byte *pPackageId) {
+uint8_t RFReceiver::recvPackage(uint8_t *data, uint8_t *pSenderId, uint8_t *pPackageId) {
   for (;;) {
-    byte len = recvDataRaw(data);
-    byte senderId = data[len - 2];
-    byte packageId = data[len - 1];
+    uint8_t len = recvDataRaw(data);
+    uint8_t senderId = data[len - 2];
+    uint8_t packageId = data[len - 1];
 
     if (pSenderId)
       *pSenderId = senderId;
@@ -135,3 +131,24 @@ byte RFReceiver::recvPackage(byte *data, byte *pSenderId, byte *pPackageId) {
     return len - 2;
   }
 }
+
+RFReceiver* RFReceiver::instance = 0;
+
+int RFReceiver::begin(uint8_t gpio) {
+
+  instance = this;
+  int returnCode = gpioInitialise();
+
+  if (returnCode >= 0)
+  {  
+    gpioSetMode(gpio, PI_INPUT);  
+    gpioSetAlertFunc(gpio, staticHandleGpio);
+  }
+
+  return returnCode;
+}
+
+void RFReceiver::stop() {
+  gpioTerminate();
+}
+
